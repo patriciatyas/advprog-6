@@ -104,3 +104,96 @@ Request: [
 
 3. Permintaan Berulang
 - Jika permintaan GET dikirim berkali-kali oleh browser, output akan muncul beberapa kali karena browser sering mengirim permintaan tambahan untuk caching dan koneksi keep-alive. Hal ini menjelaskan mengapa permintaan GET bisa muncul lebih dari sekali dalam log terminal.
+
+
+## Commit 2 Reflection
+
+![Commit 2 screen capture](/assets/images/commit2.png)
+
+```rust
+use std::{
+    fs,
+    ...
+};
+
+...
+
+fn handle_connection(mut stream: TcpStream) {
+    ...
+
+    let status_line = "HTTP/1.1 200 OK";
+    let contents = fs::read_to_string("hello.html").unwrap();
+    let length = contents.len();
+
+    let response = format!("{status_line}\r\nContent-Length: {length}\r\n\r\n{contents}");
+    stream.write_all(response.as_bytes()).unwrap();
+}
+
+```
+
+### Perubahan yang dilakukan
+Pada commit 2, Pada commit ini, kita mengembangkan fungsi `handle_connection` agar server tidak hanya membaca HTTP request tetapi juga mengirimkan respons HTTP yang berisi file HTML (`hello.html`). Berikut adalah detail perubahan yang dilakukan:
+
+Kode baru di `handle_connection`:
+```rust
+use std::{fs, io::prelude::*, net::TcpStream};
+
+fn handle_connection(mut stream: TcpStream) {
+    let buf_reader = std::io::BufReader::new(&mut stream);
+    let http_request: Vec<_> = buf_reader
+        .lines()
+        .map(|result| result.unwrap())
+        .take_while(|line| !line.is_empty())
+        .collect();
+
+    println!("Request: {:#?}", http_request);
+
+    let status_line = "HTTP/1.1 200 OK";
+    let contents = fs::read_to_string("hello.html").unwrap();
+    let length = contents.len();
+
+    let response = format!("{status_line}\r\nContent-Length: {length}\r\n\r\n{contents}");
+    stream.write_all(response.as_bytes()).unwrap();
+}
+```
+
+Fungsi `handle_connection` sekarang membaca request HTTP menggunakan `BufReader::new(&mut stream)`, yang membungkus `stream` agar dapat dibaca baris per baris. Kemudian, `.lines()` digunakan untuk mengambil setiap baris dari request yang dikirim klien, diikuti dengan `.map(|result| result.unwrap())` untuk mengurai hasilnya menjadi string. Proses pembacaan dihentikan dengan `.take_while(|line| !line.is_empty())`, yang memastikan kita hanya mengambil header HTTP hingga baris kosong (`\r\n`). Hasilnya adalah vektor (`Vec<_>`) berisi seluruh header HTTP, yang kemudian ditampilkan ke terminal menggunakan `println!("Request: {:#?}", http_request);`.
+
+Setelah request diproses, server menyusun respons HTTP dengan membaca file HTML menggunakan `fs::read_to_string("hello.html").unwrap()`. Jika file ditemukan, isinya disimpan dalam variabel `contents`, dan panjang kontennya dihitung menggunakan `contents.len()`. Respons kemudian dirangkai dalam format standar HTTP menggunakan `format!("{status_line}\r\nContent-Length: {length}\r\n\r\n{contents}")`, di mana `status_line` berisi `"HTTP/1.1 200 OK"`, `Content-Length` menunjukkan ukuran file, dan bagian terakhir adalah isi dari `hello.html`.
+
+Akhirnya, respons dikirim ke klien melalui `stream.write_all(response.as_bytes()).unwrap();`. Metode `write_all()` memastikan bahwa seluruh data dikirim melalui TCP stream, sementara `as_bytes()` mengubah string menjadi byte array agar bisa dikirim melalui jaringan. Dengan perubahan ini, jika server dijalankan menggunakan `cargo run` dan diakses melalui `http://127.0.0.1:7878`, browser akan menerima halaman HTML yang berisi:
+
+```
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <title>Hello!</title>
+    </head> 
+    <body>
+        <h1>Hello!</h1>
+        <p>Hi from Rust, running from Patricia's machine.</p>
+    </body>
+</html>
+```
+
+Dengan ini, server Rust sekarang bisa mengirimkan file HTML sebagai respons HTTP. Penggunaan fungsi `fs::read_to_string()` membuatnya lebih fleksibel karena konten halaman dapat diperbarui tanpa perlu mengubah kode Rust. Header `Content-Length` juga ditambahkan untuk memastikan respons dikirim dengan benar. 
+
+Ketika menjalankan `cargo run`, muncul peringatan berikut:
+
+```
+PS C:\adpro\module-6\hello> cargo run
+warning: unused variable: `http_request`
+  --> src\main.rs:18:9
+   |
+18 |     let http_request: Vec<_> = buf_reader
+   |         ^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_http_request`
+   |
+   = note: `#[warn(unused_variables)]` on by default
+
+warning: `hello` (bin "hello") generated 1 warning
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.01s
+     Running `target\debug\hello.exe`
+```
+
+Peringatan ini muncul karena variabel `http_request` dideklarasikan tetapi tidak digunakan di dalam kode. Compiler menyarankan untuk menambahkan awalan underscore jika memang variabel tersebut sengaja tidak digunakan. Meskipun ada peringatan tersebut, program tetap berhasil di-compile dan dijalankan dalam mode development dengan profil debug yang unoptimized.
