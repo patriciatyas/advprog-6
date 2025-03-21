@@ -374,3 +374,67 @@ Terdapat perubahan pada `main.rs` dan terdapat file baru bernama `lib.rs`:
 Berdasarkan kedua kode tersebut, server telah diperbarui menjadi model multithreaded dengan implementasi Thread Pool untuk menangani _concurrency_. Pada `main.rs`, perubahan utama adalah pembuatan instance `ThreadPool` dengan 4 thread worker dan penggunaan metode `pool.execute()` untuk membagi penanganan koneksi ke thread pool. Hal ini memungkinkan server untuk menangani beberapa koneksi secara bersamaan tanpa blocking satu sama lain.
  
 File `lib.rs` sendiri mengimplementasikan infrastruktur thread pool dengan struktur `ThreadPool` yang berisikan kumpulan `Worker` dan sistem komunikasi berbasis channel. Setiap `Worker` memiliki thread yang berjalan dalam _infinite loop_, menunggu pekerjaan dari channel yang dibagikan menggunakan `Arc<Mutex<>>`. Ketika method `execute()` dipanggil, pekerjaan akan dibungkus dalam `Box` dan dikirim melalui channel ke salah satu worker yang tersedia. Implementasi ini memanfaatkan beberapa fitur dalam Rust seperti ownership untuk menciptakan sistem _concurrency_ yang aman dan efisien. Hal ini dibuktikan dengan tidak adanya delay ketika mengakses page lain ketika membuka rute `/sleep`.
+
+## Commit Bonus Reflection
+ 
+Terdapat perbaikan dan peningkatan pada implementasi Thread Pool, di `main.rs` dan `lib.rs`:
+ 
+```rust
+fn main() {
+     ...
+ 
+     for stream in listener.incoming() {
+         let stream = stream.unwrap();
+         ...
+     }
+}
+```
+ 
+```rust
+pub struct PoolCreationError {
+     reason: String,
+}
+ 
+impl fmt::Display for PoolCreationError {
+     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+         write!(
+             f,
+             "Unable to create ThreadPool: {}", self.reason
+         )
+     }
+}
+ 
+impl fmt::Debug for PoolCreationError {
+     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+         write!(f, "{{ file: {}, line: {} }}", file!(), line!())
+     }
+}
+ 
+impl ThreadPool {
+     pub fn build(size: usize) -> Result<ThreadPool, PoolCreationError> {
+         if size <= 0 {
+             Err(PoolCreationError {
+                 reason: "Thread count must be a positive nonzero integer".to_string()
+             })
+         } else {
+             let (sender, receiver) = mpsc::channel();
+             let receiver = Arc::new(Mutex::new(receiver));
+ 
+             let mut workers = Vec::with_capacity(size);
+ 
+             for id in 0..size {
+                 workers.push(Worker::new(id, Arc::clone(&receiver)));
+             }
+ 
+             Ok(ThreadPool { workers, sender })
+         }
+     }
+     
+     ...
+}
+```
+Saya meningkatkan cara kerja Thread Pool dengan menambahkan metode `build` di `ThreadPool`. Sebelumnya, pembuatan thread pool langsung dilakukan dengan `ThreadPool::new(4)`, tetapi sekarang menggunakan `ThreadPool::build(4)`, yang lebih aman karena bisa menangani error jika terjadi masalah saat inisialisasi.
+
+Metode `build` menerima jumlah thread sebagai parameter dan mengembalikan `Result<ThreadPool, PoolCreationError>`. Jika jumlah thread yang diberikan kurang dari atau sama dengan nol, maka akan mengembalikan error `PoolCreationError` dengan alasan yang jelas. Untuk memudahkan debugging, saya juga menambahkan implementasi `Display` dan `Debug` pada `PoolCreationError`, sehingga informasi error bisa ditampilkan dengan lebih informatif.
+
+Dengan perubahan ini, server menjadi lebih stabil dan aman karena kesalahan dalam konfigurasi thread pool bisa dideteksi lebih awal sebelum server benar-benar berjalan.
