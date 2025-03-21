@@ -291,3 +291,86 @@ Dengan perubahan ini, server menjadi lebih modular dan mampu menangani berbagai 
      stream.write_all(response.as_bytes()).unwrap();
  }
  ```
+
+## Commit 5 Reflection
+Terdapat perubahan pada `main.rs` dan terdapat file baru bernama `lib.rs`:
+ 
+```rust
+ // main.rs
+ use hello::ThreadPool;
+ 
+ fn main() {
+     let listener = TcpListener::bind("127.0.0.1:7878").unwrap();
+     let pool = ThreadPool::new(4);
+ 
+     for stream in listener.incoming() {
+         let stream = stream.unwrap();
+ 
+         pool.execute(|| {
+             handle_connection(stream);
+         });
+     }
+ }
+ ```
+ 
+ ```rust
+ // lib.rs
+ use std::{
+     sync::{mpsc, Arc, Mutex},
+     thread::{self, JoinHandle},
+ };
+ 
+ pub struct ThreadPool {
+     workers: Vec<Worker>,
+     sender: mpsc::Sender<Job>,
+ }
+ 
+ type Job = Box<dyn FnOnce() + Send + 'static>;
+ 
+ impl ThreadPool {
+     pub fn new(size: usize) -> ThreadPool {
+         assert!(size > 0);
+ 
+         let (sender, receiver) = mpsc::channel();
+         let receiver = Arc::new(Mutex::new(receiver));
+ 
+         let mut workers = Vec::with_capacity(size);
+ 
+         for id in 0..size {
+             workers.push(Worker::new(id, Arc::clone(&receiver)));
+         }
+ 
+         ThreadPool { workers, sender }
+     }
+ 
+     pub fn execute<F>(&self, f: F)
+     where
+         F: FnOnce() + Send + 'static,
+     {
+         let job = Box::new(f);
+ 
+         self.sender.send(job).unwrap();
+     }
+ }
+ 
+ struct Worker {
+     id: usize,
+     thread: thread::JoinHandle<()>,
+ }
+ 
+ impl Worker {
+     fn new(id: usize, receiver: Arc<Mutex<mpsc::Receiver<Job>>>) -> Worker {
+         let thread = thread::spawn(move || loop {
+             let job = receiver.lock().unwrap().recv().unwrap();
+             println!("Worker {id} got a job; executing.");
+             job();
+         });
+ 
+         Worker { id, thread }
+     }
+ }
+ ```
+ 
+Berdasarkan kedua kode tersebut, server telah diperbarui menjadi model multithreaded dengan implementasi Thread Pool untuk menangani _concurrency_. Pada `main.rs`, perubahan utama adalah pembuatan instance `ThreadPool` dengan 4 thread worker dan penggunaan metode `pool.execute()` untuk membagi penanganan koneksi ke thread pool. Hal ini memungkinkan server untuk menangani beberapa koneksi secara bersamaan tanpa blocking satu sama lain.
+ 
+File `lib.rs` sendiri mengimplementasikan infrastruktur thread pool dengan struktur `ThreadPool` yang berisikan kumpulan `Worker` dan sistem komunikasi berbasis channel. Setiap `Worker` memiliki thread yang berjalan dalam _infinite loop_, menunggu pekerjaan dari channel yang dibagikan menggunakan `Arc<Mutex<>>`. Ketika method `execute()` dipanggil, pekerjaan akan dibungkus dalam `Box` dan dikirim melalui channel ke salah satu worker yang tersedia. Implementasi ini memanfaatkan beberapa fitur dalam Rust seperti ownership untuk menciptakan sistem _concurrency_ yang aman dan efisien. Hal ini dibuktikan dengan tidak adanya delay ketika mengakses page lain ketika membuka rute `/sleep`.
